@@ -92,11 +92,15 @@ DEFAULT_CONFIG = _apply_env_overrides({
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
+    # Options per category: yfinance, akshare, alpha_vantage
+    # Akshare uses Chinese financial data sources (East Money, Sina) and is
+    # accessible from mainland China without proxy. Recommended for users
+    # behind the Great Firewall.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "akshare",        # Options: yfinance, akshare, alpha_vantage
+        "technical_indicators": "akshare",   # Options: yfinance, akshare, alpha_vantage
+        "fundamental_data": "akshare",       # Options: yfinance, akshare, alpha_vantage
+        "news_data": "yfinance",             # Options: yfinance, akshare, alpha_vantage
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

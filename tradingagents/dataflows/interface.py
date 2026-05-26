@@ -23,6 +23,17 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
+from .akshare_data import (
+    get_stock_data_akshare,
+    get_stock_stats_indicators_window_akshare,
+    get_fundamentals_akshare,
+    get_balance_sheet_akshare,
+    get_cashflow_akshare,
+    get_income_statement_akshare,
+    get_insider_transactions_akshare,
+    get_news_akshare,
+    get_global_news_akshare,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -62,6 +73,7 @@ TOOLS_CATEGORIES = {
 
 VENDOR_LIST = [
     "yfinance",
+    "akshare",
     "alpha_vantage",
 ]
 
@@ -70,41 +82,50 @@ VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
+        "akshare": get_stock_data_akshare,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
+        "akshare": get_stock_stats_indicators_window_akshare,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
+        "akshare": get_fundamentals_akshare,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
+        "akshare": get_balance_sheet_akshare,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
+        "akshare": get_cashflow_akshare,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
+        "akshare": get_income_statement_akshare,
         "yfinance": get_yfinance_income_statement,
     },
     # news_data
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
+        "akshare": get_news_akshare,
         "yfinance": get_news_yfinance,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
+        "akshare": get_global_news_akshare,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
+        "akshare": get_insider_transactions_akshare,
         "yfinance": get_yfinance_insider_transactions,
     },
 }

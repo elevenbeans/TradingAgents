@@ -1,0 +1,513 @@
+from typing import Annotated, Optional
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import pandas as pd
+import akshare as ak
+import os
+import re
+from .stockstats_utils import _clean_dataframe
+from .config import get_config
+from .utils import safe_ticker_component
+
+
+def _normalize_hk_symbol(symbol: str) -> str:
+    """Normalize HK stock symbol to akshare format (5-digit zero-padded).
+
+    Handles formats: '0700.HK', '0700', '700', '00700'. Returns the
+    original symbol unchanged if it doesn't look like a HK stock.
+    """
+    s = symbol.upper().strip()
+    if s.endswith('.HK'):
+        s = s[:-3]
+    s = s.strip()
+    if s.isdigit():
+        return s.zfill(5)
+    return symbol
+
+
+def _is_hk_ticker(symbol: str) -> bool:
+    """Check if the ticker is a Hong Kong stock."""
+    s = symbol.upper().strip()
+    if s.endswith('.HK'):
+        return True
+    s = s.replace('.HK', '')
+    return bool(re.match(r'^\d{1,5}$', s.strip()))
+
+
+def get_stock_data_akshare(
+    symbol: Annotated[str, "ticker symbol"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Retrieve stock price data (OHLCV) via akshare.
+
+    Supports HK stocks (.HK) via East Money API.
+    Accessible from mainland China without proxy.
+    """
+    datetime.strptime(start_date, "%Y-%m-%d")
+    datetime.strptime(end_date, "%Y-%m-%d")
+
+    start_clean = start_date.replace("-", "")
+    end_clean = end_date.replace("-", "")
+
+    try:
+        if _is_hk_ticker(symbol):
+            sym = _normalize_hk_symbol(symbol)
+            data = ak.stock_hk_hist(
+                symbol=sym,
+                period="daily",
+                start_date=start_clean,
+                end_date=end_clean,
+                adjust="qfq",
+            )
+        else:
+            return (
+                f"Akshare data source does not support symbol '{symbol}'. "
+                "Currently supports HK stock tickers (e.g. 0700.HK)."
+            )
+
+        if data.empty:
+            return f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
+
+        expected_cols = {"日期", "开盘", "收盘", "最高", "最低", "成交量"}
+        if not expected_cols.issubset(data.columns):
+            return (
+                f"Unexpected data format for '{symbol}'. "
+                f"Got columns: {list(data.columns)}"
+            )
+
+        result = pd.DataFrame()
+        result["Date"] = data["日期"]
+        result["Open"] = pd.to_numeric(data["开盘"], errors="coerce").round(2)
+        result["High"] = pd.to_numeric(data["最高"], errors="coerce").round(2)
+        result["Low"] = pd.to_numeric(data["最低"], errors="coerce").round(2)
+        result["Close"] = pd.to_numeric(data["收盘"], errors="coerce").round(2)
+        result["Volume"] = pd.to_numeric(data["成交量"], errors="coerce")
+        if "Adj Close" in data.columns:
+            result["Adj Close"] = pd.to_numeric(data["Adj Close"], errors="coerce").round(2)
+        else:
+            result["Adj Close"] = result["Close"]
+
+        result = result.sort_values("Date")
+
+        csv_string = result.to_csv(index=False)
+        header = f"# Stock data for {symbol} from {start_date} to {end_date}\n"
+        header += f"# Total records: {len(result)}\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+        return header + csv_string
+
+    except Exception as e:
+        return f"Error retrieving stock data for {symbol}: {str(e)}"
+
+
+def load_ohlcv_akshare(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Fetch OHLCV data via akshare with caching, filtered to prevent look-ahead bias.
+
+    Mirrors the interface of stockstats_utils.load_ohlcv but uses akshare
+    instead of yfinance. Accessible from mainland China without proxy.
+    """
+    safe_symbol = safe_ticker_component(symbol)
+    config = get_config()
+    curr_date_dt = pd.to_datetime(curr_date)
+    today_date = pd.Timestamp.today()
+    start_date = today_date - pd.DateOffset(years=5)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = today_date.strftime("%Y-%m-%d")
+
+    os.makedirs(config["data_cache_dir"], exist_ok=True)
+    data_file = os.path.join(
+        config["data_cache_dir"],
+        f"{safe_symbol}-akshare-data-{start_str}-{end_str}.csv",
+    )
+
+    if os.path.exists(data_file):
+        data = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
+    else:
+        if _is_hk_ticker(symbol):
+            sym = _normalize_hk_symbol(symbol)
+            raw = ak.stock_hk_hist(
+                symbol=sym,
+                period="daily",
+                start_date=start_str.replace("-", ""),
+                end_date=end_str.replace("-", ""),
+                adjust="qfq",
+            )
+            data = pd.DataFrame()
+            data["Date"] = pd.to_datetime(raw["日期"])
+            data["Open"] = pd.to_numeric(raw["开盘"], errors="coerce")
+            data["High"] = pd.to_numeric(raw["最高"], errors="coerce")
+            data["Low"] = pd.to_numeric(raw["最低"], errors="coerce")
+            data["Close"] = pd.to_numeric(raw["收盘"], errors="coerce")
+            data["Volume"] = pd.to_numeric(raw["成交量"], errors="coerce")
+        else:
+            raise ValueError(f"Akshare data source does not support symbol '{symbol}'")
+
+        data.to_csv(data_file, index=False, encoding="utf-8")
+
+    data = _clean_dataframe(data)
+    data = data[data["Date"] <= curr_date_dt]
+
+    return data
+
+
+def get_stock_stats_indicators_window_akshare(
+    symbol: Annotated[str, "ticker symbol"],
+    indicator: Annotated[str, "technical indicator name"],
+    curr_date: Annotated[str, "The current trading date, YYYY-mm-dd"],
+    look_back_days: Annotated[int, "how many days to look back"] = 30,
+) -> str:
+    """Calculate technical indicators using akshare OHLCV data + stockstats."""
+    from stockstats import wrap
+
+    best_ind_params = {
+        "close_50_sma": (
+            "50 SMA: A medium-term trend indicator. "
+            "Usage: Identify trend direction and serve as dynamic support/resistance."
+        ),
+        "close_200_sma": (
+            "200 SMA: A long-term trend benchmark. "
+            "Usage: Confirm overall market trend and identify golden/death cross setups."
+        ),
+        "close_10_ema": (
+            "10 EMA: A responsive short-term average. "
+            "Usage: Capture quick shifts in momentum and potential entry points."
+        ),
+        "macd": (
+            "MACD: Computes momentum via differences of EMAs. "
+            "Usage: Look for crossovers and divergence as signals of trend changes."
+        ),
+        "macds": (
+            "MACD Signal: An EMA smoothing of the MACD line. "
+            "Usage: Use crossovers with the MACD line to trigger trades."
+        ),
+        "macdh": (
+            "MACD Histogram: Shows the gap between the MACD line and its signal. "
+            "Usage: Visualize momentum strength and spot divergence early."
+        ),
+        "rsi": (
+            "RSI: Measures momentum to flag overbought/oversold conditions. "
+            "Usage: Apply 70/30 thresholds and watch for divergence."
+        ),
+        "boll": (
+            "Bollinger Middle: A 20 SMA serving as the basis for Bollinger Bands. "
+            "Usage: Acts as a dynamic benchmark for price movement."
+        ),
+        "boll_ub": (
+            "Bollinger Upper Band: Typically 2 standard deviations above the middle line."
+        ),
+        "boll_lb": (
+            "Bollinger Lower Band: Typically 2 standard deviations below the middle line."
+        ),
+        "atr": (
+            "ATR: Averages true range to measure volatility. "
+            "Usage: Set stop-loss levels and adjust position sizes."
+        ),
+        "vwma": (
+            "VWMA: A moving average weighted by volume. "
+            "Usage: Confirm trends by integrating price action with volume data."
+        ),
+        "mfi": (
+            "MFI: Money Flow Index, uses both price and volume to measure buying/selling pressure."
+        ),
+    }
+
+    if indicator not in best_ind_params:
+        raise ValueError(
+            f"Indicator {indicator} is not supported. Choose from: {list(best_ind_params.keys())}"
+        )
+
+    end_date = curr_date
+    curr_date_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    before = curr_date_dt - relativedelta(days=look_back_days)
+
+    try:
+        data = load_ohlcv_akshare(symbol, curr_date)
+        df = wrap(data)
+        df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
+
+        df[indicator]
+
+        result_dict = {}
+        for _, row in df.iterrows():
+            date_str = row["Date"]
+            val = row[indicator]
+            result_dict[date_str] = str(val) if not pd.isna(val) else "N/A"
+
+        current_dt = curr_date_dt
+        ind_string = ""
+        while current_dt >= before:
+            date_str = current_dt.strftime("%Y-%m-%d")
+            value = result_dict.get(date_str, "N/A: Not a trading day (weekend or holiday)")
+            ind_string += f"{date_str}: {value}\n"
+            current_dt = current_dt - relativedelta(days=1)
+
+    except Exception as e:
+        return f"Error calculating {indicator} for {symbol}: {str(e)}"
+
+    result_str = (
+        f"## {indicator} values from {before.strftime('%Y-%m-%d')} to {end_date}:\n\n"
+        + ind_string
+        + "\n\n"
+        + best_ind_params.get(indicator, "No description available.")
+    )
+
+    return result_str
+
+
+def get_fundamentals_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    curr_date: Annotated[str, "current date, yyyy-mm-dd"] = None,
+) -> str:
+    """Get company fundamentals overview via akshare.
+
+    Combines company profile with key financial indicators.
+    """
+    try:
+        if _is_hk_ticker(ticker):
+            sym = _normalize_hk_symbol(ticker)
+
+            lines = []
+            header = f"# Company Fundamentals for {ticker}\n"
+            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+            profile = ak.stock_hk_company_profile_em(symbol=sym)
+            if not profile.empty:
+                for _, row in profile.iterrows():
+                    for col in profile.columns:
+                        val = row[col]
+                        if pd.notna(val) and str(val).strip():
+                            label = col.replace("_", " ").strip()
+                            lines.append(f"{label}: {val}")
+
+            indicators = ak.stock_hk_financial_indicator_em(symbol=sym)
+            if not indicators.empty:
+                lines.append("\n--- Key Financial Indicators ---")
+                indicator_labels = {
+                    "基本每股收益(元)": "EPS (Basic)",
+                    "每股净资产(元)": "Book Value per Share",
+                    "每股经营现金流(元)": "Operating CF per Share",
+                    "股息率TTM(%)": "Dividend Yield (TTM)",
+                    "总市值(港元)": "Market Cap (HKD)",
+                    "营业总收入": "Total Revenue",
+                    "净利润": "Net Income",
+                    "销售净利率(%)": "Net Profit Margin",
+                    "股东权益回报率(%)": "ROE",
+                    "总资产回报率(%)": "ROA",
+                    "市盈率": "PE Ratio",
+                    "市净率": "PB Ratio",
+                }
+                for _, row in indicators.iterrows():
+                    for col, label in indicator_labels.items():
+                        if col in row and pd.notna(row[col]):
+                            lines.append(f"{label}: {row[col]}")
+
+            if lines:
+                return header + "\n".join(lines)
+            return f"No fundamentals data found for '{ticker}'"
+
+        return f"No fundamentals data available for '{ticker}' via akshare"
+
+    except Exception as e:
+        return f"Error retrieving fundamentals for {ticker}: {str(e)}"
+
+
+def _fetch_hk_financial_report(ticker: str, report_type: str, curr_date: str = None) -> pd.DataFrame:
+    """Fetch HK stock financial report from East Money, pivoted to wide format.
+
+    East Money returns data in long format (one row per item per period).
+    This function pivots to wide format as columns=dates, rows=items,
+    which matches the format expected by downstream tools and agents.
+
+    Args:
+        ticker: HK stock ticker (e.g. 0700.HK)
+        report_type: "资产负债表", "利润表", or "现金流量表"
+        curr_date: if set, filters to periods on or before this date
+    """
+    sym = _normalize_hk_symbol(ticker)
+    indicator = "年度"
+    raw = ak.stock_financial_hk_report_em(stock=sym, symbol=report_type, indicator=indicator)
+
+    if raw.empty:
+        return raw
+
+    required = {"STD_ITEM_NAME", "REPORT_DATE", "AMOUNT"}
+    if not required.issubset(raw.columns):
+        return raw
+
+    raw["REPORT_DATE"] = pd.to_datetime(raw["REPORT_DATE"])
+
+    data = raw.pivot_table(
+        index="STD_ITEM_NAME",
+        columns="REPORT_DATE",
+        values="AMOUNT",
+        aggfunc="first",
+    )
+
+    data.columns.name = None
+    data.index.name = None
+
+    if curr_date:
+        cutoff = pd.Timestamp(curr_date)
+        data = data[[c for c in data.columns if c <= cutoff]]
+
+    data.columns = [c.strftime("%Y-%m-%d") for c in data.columns]
+    data = data.reset_index()
+    data.columns = ["Item"] + list(data.columns[1:])
+
+    return data
+
+
+def get_balance_sheet_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    freq: Annotated[str, "frequency: annual/quarterly"] = "quarterly",
+    curr_date: Annotated[str, "current date, YYYY-MM-DD"] = None,
+) -> str:
+    """Get balance sheet data via akshare financial reports."""
+    try:
+        if _is_hk_ticker(ticker):
+            data = _fetch_hk_financial_report(ticker, "资产负债表", curr_date)
+
+            if data.empty:
+                return f"No balance sheet data found for '{ticker}'"
+
+            csv_string = data.to_csv(index=False)
+            header = f"# Balance Sheet data for {ticker} ({freq})\n"
+            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            return header + csv_string
+
+        return f"No balance sheet data for '{ticker}' via akshare"
+
+    except Exception as e:
+        return f"Error retrieving balance sheet for {ticker}: {str(e)}"
+
+
+def get_cashflow_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    freq: Annotated[str, "frequency: annual/quarterly"] = "quarterly",
+    curr_date: Annotated[str, "current date, YYYY-MM-DD"] = None,
+) -> str:
+    """Get cash flow data via akshare financial reports."""
+    try:
+        if _is_hk_ticker(ticker):
+            data = _fetch_hk_financial_report(ticker, "现金流量表", curr_date)
+
+            if data.empty:
+                return f"No cash flow data found for '{ticker}'"
+
+            csv_string = data.to_csv(index=False)
+            header = f"# Cash Flow data for {ticker} ({freq})\n"
+            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            return header + csv_string
+
+        return f"No cash flow data for '{ticker}' via akshare"
+
+    except Exception as e:
+        return f"Error retrieving cash flow for {ticker}: {str(e)}"
+
+
+def get_income_statement_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    freq: Annotated[str, "frequency: annual/quarterly"] = "quarterly",
+    curr_date: Annotated[str, "current date, YYYY-MM-DD"] = None,
+) -> str:
+    """Get income statement data via akshare financial reports."""
+    try:
+        if _is_hk_ticker(ticker):
+            data = _fetch_hk_financial_report(ticker, "利润表", curr_date)
+
+            if data.empty:
+                return f"No income statement data found for '{ticker}'"
+
+            csv_string = data.to_csv(index=False)
+            header = f"# Income Statement data for {ticker} ({freq})\n"
+            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            return header + csv_string
+
+        return f"No income statement data for '{ticker}' via akshare"
+
+    except Exception as e:
+        return f"Error retrieving income statement for {ticker}: {str(e)}"
+
+
+def get_insider_transactions_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+) -> str:
+    """Get insider transaction information.
+
+    Note: Akshare does not provide HK insider transaction data.
+    Returns a user-friendly message.
+    """
+    return (
+        f"Insider transaction data is not available for '{ticker}' via akshare. "
+        "This data source does not support HK stock insider transactions."
+    )
+
+
+def get_news_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Get news for a ticker via akshare.
+
+    Akshare's HK news coverage is limited. Returns what's available
+    from East Money's HK stock news.
+    """
+    try:
+        if _is_hk_ticker(ticker):
+            sym = _normalize_hk_symbol(ticker)
+            news = ak.stock_hk_ggt_components_em()
+
+            header = f"# News for {ticker} from {start_date} to {end_date}\n"
+            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+            try:
+                news_detail = ak.stock_hk_famous_spot_em()
+                articles = []
+                if not news_detail.empty:
+                    for _, row in news_detail.iterrows():
+                        articles.append(str(dict(row)))
+
+                if articles:
+                    return header + "\n".join(articles[:20])
+
+                return header + "No specific news articles found for this period."
+
+            except Exception:
+                return header + "News data temporarily unavailable. Try again later."
+
+        return f"News data for '{ticker}' is not available via akshare."
+
+    except Exception as e:
+        return f"Error retrieving news for {ticker}: {str(e)}"
+
+
+def get_global_news_akshare(
+    curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+    look_back_days: Annotated[Optional[int], "Days to look back"] = None,
+    limit: Annotated[Optional[int], "Max articles"] = None,
+) -> str:
+    """Get global/macro news via akshare.
+
+    Falls back to Chinese financial news sources since akshare
+    does not have direct global news feeds.
+    """
+    config = get_config()
+    if limit is None:
+        limit = config.get("global_news_article_limit", 10)
+    if look_back_days is None:
+        look_back_days = config.get("global_news_lookback_days", 7)
+
+    header = f"# Global Macro News\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    header += f"# Lookback: {look_back_days} days\n\n"
+
+    try:
+        macro_news = ak.macro_china_hk_market_info()
+        if not macro_news.empty:
+            articles = macro_news.head(limit).to_string(index=False)
+            return header + articles
+        return header + "No global news data available."
+    except Exception:
+        return header + "Global news data temporarily unavailable."
