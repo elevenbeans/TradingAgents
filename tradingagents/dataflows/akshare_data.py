@@ -34,6 +34,28 @@ def _is_hk_ticker(symbol: str) -> bool:
     return bool(re.match(r'^\d{1,5}$', s.strip()))
 
 
+def _normalize_a_share_symbol(symbol: str) -> str:
+    """Normalize A-share symbol to akshare format (6 digits, no suffix).
+
+    Handles formats: '600519.SS', '600519', '000001.SZ', '000001'.
+    """
+    s = symbol.upper().strip()
+    s = re.sub(r'\.(SS|SZ)$', '', s)
+    return s
+
+
+def _is_a_share_ticker(symbol: str) -> bool:
+    """Check if the ticker is a China A-share stock."""
+    s = symbol.upper().strip()
+    if s.endswith('.SS') or s.endswith('.SZ'):
+        return True
+    # 6-digit codes with no suffix are commonly A-share
+    s_no_suffix = re.sub(r'\.(SS|SZ)$', '', s)
+    if re.match(r'^\d{6}$', s_no_suffix):
+        return True
+    return False
+
+
 def get_stock_data_akshare(
     symbol: Annotated[str, "ticker symbol"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
@@ -60,10 +82,20 @@ def get_stock_data_akshare(
                 end_date=end_clean,
                 adjust="qfq",
             )
+        elif _is_a_share_ticker(symbol):
+            sym = _normalize_a_share_symbol(symbol)
+            data = ak.stock_zh_a_hist(
+                symbol=sym,
+                period="daily",
+                start_date=start_clean,
+                end_date=end_clean,
+                adjust="qfq",
+            )
         else:
             return (
                 f"Akshare data source does not support symbol '{symbol}'. "
-                "Currently supports HK stock tickers (e.g. 0700.HK)."
+                "Currently supports HK stock tickers (e.g. 0700.HK) "
+                "and A-share tickers (e.g. 600519.SS, 000001.SZ)."
             )
 
         if data.empty:
@@ -127,6 +159,22 @@ def load_ohlcv_akshare(symbol: str, curr_date: str) -> pd.DataFrame:
         if _is_hk_ticker(symbol):
             sym = _normalize_hk_symbol(symbol)
             raw = ak.stock_hk_hist(
+                symbol=sym,
+                period="daily",
+                start_date=start_str.replace("-", ""),
+                end_date=end_str.replace("-", ""),
+                adjust="qfq",
+            )
+            data = pd.DataFrame()
+            data["Date"] = pd.to_datetime(raw["日期"])
+            data["Open"] = pd.to_numeric(raw["开盘"], errors="coerce")
+            data["High"] = pd.to_numeric(raw["最高"], errors="coerce")
+            data["Low"] = pd.to_numeric(raw["最低"], errors="coerce")
+            data["Close"] = pd.to_numeric(raw["收盘"], errors="coerce")
+            data["Volume"] = pd.to_numeric(raw["成交量"], errors="coerce")
+        elif _is_a_share_ticker(symbol):
+            sym = _normalize_a_share_symbol(symbol)
+            raw = ak.stock_zh_a_hist(
                 symbol=sym,
                 period="daily",
                 start_date=start_str.replace("-", ""),
@@ -264,12 +312,12 @@ def get_fundamentals_akshare(
     Combines company profile with key financial indicators.
     """
     try:
+        header = f"# Company Fundamentals for {ticker}\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        lines = []
+
         if _is_hk_ticker(ticker):
             sym = _normalize_hk_symbol(ticker)
-
-            lines = []
-            header = f"# Company Fundamentals for {ticker}\n"
-            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
             profile = ak.stock_hk_company_profile_em(symbol=sym)
             if not profile.empty:
@@ -302,60 +350,91 @@ def get_fundamentals_akshare(
                         if col in row and pd.notna(row[col]):
                             lines.append(f"{label}: {row[col]}")
 
-            if lines:
-                return header + "\n".join(lines)
-            return f"No fundamentals data found for '{ticker}'"
+        elif _is_a_share_ticker(ticker):
+            sym = _normalize_a_share_symbol(ticker)
 
-        return f"No fundamentals data available for '{ticker}' via akshare"
+            info = ak.stock_individual_info_em(symbol=sym)
+            if not info.empty:
+                for _, row in info.iterrows():
+                    item = row.get("item", "")
+                    value = row.get("value", "")
+                    if pd.notna(item) and pd.notna(value):
+                        lines.append(f"{item}: {value}")
+
+            fin = ak.stock_financial_abstract(symbol=sym, indicator="按年度")
+            if not fin.empty:
+                lines.append("\n--- Key Financial Indicators ---")
+                fin_str = fin.to_string(index=False)
+                lines.append(fin_str)
+
+            profit = ak.stock_profit_sheet_by_report_em(symbol=sym)
+            if not profit.empty:
+                lines.append("\n--- Profit Forecast ---")
+                profit_str = profit.to_string(index=False)
+                lines.append(profit_str)
+
+        else:
+            return f"No fundamentals data available for '{ticker}' via akshare"
+
+        if lines:
+            return header + "\n".join(lines)
+        return f"No fundamentals data found for '{ticker}'"
 
     except Exception as e:
         return f"Error retrieving fundamentals for {ticker}: {str(e)}"
 
 
-def _fetch_hk_financial_report(ticker: str, report_type: str, curr_date: str = None) -> pd.DataFrame:
-    """Fetch HK stock financial report from East Money, pivoted to wide format.
+def _fetch_financial_report(ticker: str, report_type: str, curr_date: str = None) -> pd.DataFrame:
+    """Fetch stock financial report from East Money, pivoted to wide format.
 
     East Money returns data in long format (one row per item per period).
     This function pivots to wide format as columns=dates, rows=items,
     which matches the format expected by downstream tools and agents.
 
     Args:
-        ticker: HK stock ticker (e.g. 0700.HK)
+        ticker: HK stock ticker (e.g. 0700.HK) or A-share ticker (e.g. 600519.SS)
         report_type: "资产负债表", "利润表", or "现金流量表"
         curr_date: if set, filters to periods on or before this date
     """
-    sym = _normalize_hk_symbol(ticker)
-    indicator = "年度"
-    raw = ak.stock_financial_hk_report_em(stock=sym, symbol=report_type, indicator=indicator)
+    if _is_hk_ticker(ticker):
+        sym = _normalize_hk_symbol(ticker)
+        indicator = "年度"
+        raw = ak.stock_financial_hk_report_em(stock=sym, symbol=report_type, indicator=indicator)
+    elif _is_a_share_ticker(ticker):
+        sym = _normalize_a_share_symbol(ticker)
+        raw = ak.stock_financial_report_sina(stock=sym, symbol=report_type)
+    else:
+        raise ValueError(f"Unsupported ticker: {ticker}")
 
     if raw.empty:
         return raw
 
-    required = {"STD_ITEM_NAME", "REPORT_DATE", "AMOUNT"}
-    if not required.issubset(raw.columns):
-        return raw
+    # Check format: long format (REPORT_DATE + STD_ITEM_NAME + AMOUNT) or wide
+    if "STD_ITEM_NAME" in raw.columns and "REPORT_DATE" in raw.columns:
+        raw["REPORT_DATE"] = pd.to_datetime(raw["REPORT_DATE"])
 
-    raw["REPORT_DATE"] = pd.to_datetime(raw["REPORT_DATE"])
+        data = raw.pivot_table(
+            index="STD_ITEM_NAME",
+            columns="REPORT_DATE",
+            values="AMOUNT",
+            aggfunc="first",
+        )
 
-    data = raw.pivot_table(
-        index="STD_ITEM_NAME",
-        columns="REPORT_DATE",
-        values="AMOUNT",
-        aggfunc="first",
-    )
+        data.columns.name = None
+        data.index.name = None
 
-    data.columns.name = None
-    data.index.name = None
+        if curr_date:
+            cutoff = pd.Timestamp(curr_date)
+            data = data[[c for c in data.columns if c <= cutoff]]
 
-    if curr_date:
-        cutoff = pd.Timestamp(curr_date)
-        data = data[[c for c in data.columns if c <= cutoff]]
+        data.columns = [c.strftime("%Y-%m-%d") for c in data.columns]
+        data = data.reset_index()
+        data.columns = ["Item"] + list(data.columns[1:])
 
-    data.columns = [c.strftime("%Y-%m-%d") for c in data.columns]
-    data = data.reset_index()
-    data.columns = ["Item"] + list(data.columns[1:])
+        return data
 
-    return data
+    # Already in wide format or other format, return as-is
+    return raw
 
 
 def get_balance_sheet_akshare(
@@ -365,8 +444,8 @@ def get_balance_sheet_akshare(
 ) -> str:
     """Get balance sheet data via akshare financial reports."""
     try:
-        if _is_hk_ticker(ticker):
-            data = _fetch_hk_financial_report(ticker, "资产负债表", curr_date)
+        if _is_hk_ticker(ticker) or _is_a_share_ticker(ticker):
+            data = _fetch_financial_report(ticker, "资产负债表", curr_date)
 
             if data.empty:
                 return f"No balance sheet data found for '{ticker}'"
@@ -389,8 +468,8 @@ def get_cashflow_akshare(
 ) -> str:
     """Get cash flow data via akshare financial reports."""
     try:
-        if _is_hk_ticker(ticker):
-            data = _fetch_hk_financial_report(ticker, "现金流量表", curr_date)
+        if _is_hk_ticker(ticker) or _is_a_share_ticker(ticker):
+            data = _fetch_financial_report(ticker, "现金流量表", curr_date)
 
             if data.empty:
                 return f"No cash flow data found for '{ticker}'"
@@ -413,8 +492,8 @@ def get_income_statement_akshare(
 ) -> str:
     """Get income statement data via akshare financial reports."""
     try:
-        if _is_hk_ticker(ticker):
-            data = _fetch_hk_financial_report(ticker, "利润表", curr_date)
+        if _is_hk_ticker(ticker) or _is_a_share_ticker(ticker):
+            data = _fetch_financial_report(ticker, "利润表", curr_date)
 
             if data.empty:
                 return f"No income statement data found for '{ticker}'"
@@ -435,13 +514,24 @@ def get_insider_transactions_akshare(
 ) -> str:
     """Get insider transaction information.
 
-    Note: Akshare does not provide HK insider transaction data.
-    Returns a user-friendly message.
+    Supported: A-share holders info (top shareholders).
+    Not available: HK stock insider transactions.
     """
-    return (
-        f"Insider transaction data is not available for '{ticker}' via akshare. "
-        "This data source does not support HK stock insider transactions."
-    )
+    try:
+        if _is_a_share_ticker(ticker):
+            sym = _normalize_a_share_symbol(ticker)
+            holders = ak.stock_holdernumber(symbol=sym)
+            if not holders.empty:
+                header = f"# Shareholder Info for {ticker}\n"
+                header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                return header + holders.to_csv(index=False, encoding="utf-8")
+            return f"No shareholder data for '{ticker}'"
+        return (
+            f"Insider transaction data is not available for '{ticker}' via akshare. "
+            "Currently supports A-share tickers."
+        )
+    except Exception as e:
+        return f"Error retrieving insider data for {ticker}: {str(e)}"
 
 
 def get_news_akshare(
@@ -455,27 +545,31 @@ def get_news_akshare(
     from East Money's HK stock news.
     """
     try:
+        header = f"# News for {ticker} from {start_date} to {end_date}\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
         if _is_hk_ticker(ticker):
-            sym = _normalize_hk_symbol(ticker)
-            news = ak.stock_hk_ggt_components_em()
-
-            header = f"# News for {ticker} from {start_date} to {end_date}\n"
-            header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
             try:
                 news_detail = ak.stock_hk_famous_spot_em()
                 articles = []
                 if not news_detail.empty:
                     for _, row in news_detail.iterrows():
                         articles.append(str(dict(row)))
-
                 if articles:
                     return header + "\n".join(articles[:20])
-
                 return header + "No specific news articles found for this period."
-
             except Exception:
-                return header + "News data temporarily unavailable. Try again later."
+                return header + "News data temporarily unavailable."
+
+        elif _is_a_share_ticker(ticker):
+            sym = _normalize_a_share_symbol(ticker)
+            try:
+                news = ak.stock_info_js(symbol=sym)
+                if not news.empty:
+                    return header + news.to_csv(index=False, encoding="utf-8")
+                return header + "No news articles found."
+            except Exception:
+                return header + "News data temporarily unavailable."
 
         return f"News data for '{ticker}' is not available via akshare."
 
@@ -504,10 +598,24 @@ def get_global_news_akshare(
     header += f"# Lookback: {look_back_days} days\n\n"
 
     try:
-        macro_news = ak.macro_china_hk_market_info()
-        if not macro_news.empty:
-            articles = macro_news.head(limit).to_string(index=False)
-            return header + articles
+        news_items = []
+
+        try:
+            cn_news = ak.stock_info_global_em()
+            if not cn_news.empty:
+                news_items.append(cn_news.head(limit).to_string(index=False))
+        except Exception:
+            pass
+
+        try:
+            hk_info = ak.macro_china_hk_market_info()
+            if not hk_info.empty:
+                news_items.append(hk_info.to_string(index=False))
+        except Exception:
+            pass
+
+        if news_items:
+            return header + "\n\n".join(news_items)
         return header + "No global news data available."
     except Exception:
         return header + "Global news data temporarily unavailable."
