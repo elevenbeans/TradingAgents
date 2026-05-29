@@ -619,3 +619,116 @@ def get_global_news_akshare(
         return header + "No global news data available."
     except Exception:
         return header + "Global news data temporarily unavailable."
+
+
+def get_dragon_tiger_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+) -> str:
+    """Get Dragon-Tiger Board data (top trading seats) for an A-share stock.
+
+    The Dragon-Tiger Board discloses the top 5 brokerage trading desks
+    by buy/sell volume for stocks with significant price moves or turnover.
+    Heavy institutional buying is bullish; heavy retail buying often signals
+    distribution (出货).
+    """
+    header = f"# Dragon-Tiger Board (龙虎榜) for {ticker}\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    if not _is_a_share_ticker(ticker):
+        return header + "Dragon-Tiger Board data is only available for A-share stocks."
+
+    try:
+        sym = _normalize_a_share_symbol(ticker)
+        data = ak.stock_lhb_detail_em(date=trade_date.replace("-", ""))
+        if data.empty:
+            return header + "No Dragon-Tiger Board data found for this date."
+
+        filtered = data[data["代码"] == sym]
+        if filtered.empty:
+            return header + f"Stock {ticker} did not appear on the Dragon-Tiger Board on {trade_date}."
+
+        cols = [c for c in ["代码", "名称", "上榜原因", "营业部净买入额", "买入金额", "卖出金额", "成交额", "总成交额占比", "涨跌幅", "换手率"]
+                if c in filtered.columns]
+        result = filtered[cols].reset_index(drop=True)
+
+        lines = []
+        for _, row in result.iterrows():
+            for col in cols:
+                lines.append(f"{col}: {row[col]}")
+            lines.append("---")
+
+        return header + "\n".join(lines)
+    except Exception as e:
+        return header + f"Error retrieving Dragon-Tiger data: {str(e)}"
+
+
+def get_lockup_expiry_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+) -> str:
+    """Get upcoming restricted share lockup expiration (解禁) data.
+
+    Restricted shares (限售股) become freely tradable after a lockup period.
+    Major unlock events create selling pressure — this tool surfaces upcoming
+    and recent unlock data for risk assessment.
+    """
+    header = f"# Lockup Expiration (限售股解禁) for {ticker}\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    if not _is_a_share_ticker(ticker):
+        return header + "Lockup expiration data is only available for A-share stocks."
+
+    try:
+        sym = _normalize_a_share_symbol(ticker)
+
+        try:
+            data = ak.stock_restricted_release_queue_em(symbol=sym)
+        except Exception:
+            try:
+                data = ak.share_restricted_list_em(symbol=sym)
+            except Exception:
+                return header + f"No lockup expiration data found for {ticker} (API may have changed)."
+
+        if data.empty:
+            return header + f"No upcoming lockup expirations found for {ticker}."
+
+        csv_str = data.to_csv(index=False, encoding="utf-8")
+        return header + csv_str
+    except Exception as e:
+        return header + f"Error retrieving lockup expiration data: {str(e)}"
+
+
+def get_northbound_flow_akshare(
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+) -> str:
+    """Get Northbound capital flow (北向资金) data via Stock Connect.
+
+    Northbound flows from Hong Kong-based foreign investors through
+    Shanghai/Shenzhen-HK Stock Connect are a key daily sentiment barometer
+    for A-shares. Net inflows signal foreign confidence; persistent outflows
+    suggest bearish sentiment.
+    """
+    header = f"# Northbound Capital Flow (北向资金)\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    try:
+        data = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
+        if data.empty:
+            return header + "Northbound flow data is temporarily unavailable."
+
+        date_str = trade_date.replace("-", "")
+        if "日期" in data.columns:
+            data["日期_str"] = data["日期"].astype(str).str[:10]
+            filtered = data[data["日期_str"] == date_str]
+        else:
+            filtered = data
+
+        if filtered.empty:
+            recent = data.tail(5) if len(data) > 5 else data
+            csv_str = recent.to_csv(index=False, encoding="utf-8")
+            return header + f"No data for exact date {trade_date}. Showing most recent records:\n\n" + csv_str
+
+        csv_str = filtered.to_csv(index=False, encoding="utf-8")
+        return header + csv_str
+    except Exception as e:
+        return header + f"Error retrieving northbound flow data: {str(e)}"

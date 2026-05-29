@@ -33,6 +33,9 @@ from .akshare_data import (
     get_insider_transactions_akshare,
     get_news_akshare,
     get_global_news_akshare,
+    get_dragon_tiger_akshare,
+    get_lockup_expiry_akshare,
+    get_northbound_flow_akshare,
 )
 
 # Configuration and routing logic
@@ -67,6 +70,9 @@ TOOLS_CATEGORIES = {
             "get_news",
             "get_global_news",
             "get_insider_transactions",
+            "get_dragon_tiger",
+            "get_lockup_expiry",
+            "get_northbound_flow",
         ]
     }
 }
@@ -127,6 +133,16 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "akshare": get_insider_transactions_akshare,
         "yfinance": get_yfinance_insider_transactions,
+    },
+    # A-share specific tools (akshare only)
+    "get_dragon_tiger": {
+        "akshare": get_dragon_tiger_akshare,
+    },
+    "get_lockup_expiry": {
+        "akshare": get_lockup_expiry_akshare,
+    },
+    "get_northbound_flow": {
+        "akshare": get_northbound_flow_akshare,
     },
 }
 

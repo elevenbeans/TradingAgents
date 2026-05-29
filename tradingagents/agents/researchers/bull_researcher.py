@@ -1,4 +1,4 @@
-from tradingagents.agents.utils.agent_utils import get_language_instruction
+from tradingagents.agents.utils.agent_utils import get_language_instruction, build_instrument_context
 
 
 def create_bull_researcher(llm):
@@ -13,6 +13,8 @@ def create_bull_researcher(llm):
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
         asset_type = state.get("asset_type", "stock")
+        ticker = state.get("company_of_interest", "")
+        instrument_context = build_instrument_context(ticker, asset_type)
         target_label = "stock" if asset_type == "stock" else "asset"
         fundamentals_label = (
             "Company fundamentals report"
@@ -20,7 +22,9 @@ def create_bull_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        prompt = f"""{instrument_context}
+
+You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.

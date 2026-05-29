@@ -69,7 +69,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": "English",
+    "output_language": "Chinese",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
@@ -84,11 +84,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Search queries used by get_global_news for macro headlines. Extend or
     # replace to broaden geographic / sector coverage.
     "global_news_queries": [
-        "Federal Reserve interest rates inflation",
-        "S&P 500 earnings GDP economic outlook",
-        "geopolitical risk trade war sanctions",
-        "ECB Bank of England BOJ central bank policy",
-        "oil commodities supply chain energy",
+        "央行 货币政策 利率 降准 LPR",
+        "A股 上证指数 沪深300 经济数据 GDP",
+        "中美贸易 关税 地缘政治 制裁",
+        "人民币汇率 美联储 人民银行 外汇",
+        "原油 大宗商品 供应链 新能源 房地产",
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
@@ -100,7 +100,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "core_stock_apis": "akshare",        # Options: yfinance, akshare, alpha_vantage
         "technical_indicators": "akshare",   # Options: yfinance, akshare, alpha_vantage
         "fundamental_data": "akshare",       # Options: yfinance, akshare, alpha_vantage
-        "news_data": "yfinance",             # Options: yfinance, akshare, alpha_vantage
+        "news_data": "akshare",             # Options: yfinance, akshare, alpha_vantage
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

@@ -1,5 +1,6 @@
 from typing import Optional
 import datetime
+import os
 import typer
 import questionary
 from pathlib import Path
@@ -505,8 +506,8 @@ def get_user_selections():
     console.print(
         create_question_box(
             "Step 1: Ticker Symbol",
-            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK)",
-            "SPY",
+            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: 600519.SS, 000858.SZ, 601318.SS, 0700.HK)",
+            "600519.SS",
         )
     )
     selected_ticker = get_ticker()
@@ -1241,14 +1242,20 @@ def run_analysis(checkpoint: bool = False):
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
     # Prompt to save report
-    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
+    if os.environ.get("AUTO_YES"):
+        save_choice = "Y"
+    else:
+        save_choice = typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
-        save_path_str = typer.prompt(
-            "Save path (press Enter for default)",
-            default=str(default_path)
-        ).strip()
+        if os.environ.get("AUTO_YES"):
+            save_path_str = str(default_path)
+        else:
+            save_path_str = typer.prompt(
+                "Save path (press Enter for default)",
+                default=str(default_path)
+            ).strip()
         save_path = Path(save_path_str)
         try:
             report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
@@ -1258,7 +1265,10 @@ def run_analysis(checkpoint: bool = False):
             console.print(f"[red]Error saving report: {e}[/red]")
 
     # Prompt to display full report
-    display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
+    if os.environ.get("AUTO_YES"):
+        display_choice = "Y"
+    else:
+        display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
     if display_choice in ("Y", "YES", ""):
         display_complete_report(final_state)
 
