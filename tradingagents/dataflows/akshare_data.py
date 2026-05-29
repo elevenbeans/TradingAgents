@@ -941,3 +941,25 @@ def get_hk_short_selling_akshare(
         return header + csv_str
     except Exception as e:
         return header + f"Error retrieving short selling data: {str(e)}"
+
+
+def get_hk_ipo_akshare() -> str:
+    """Get upcoming and recent HK stock IPO / new listing data.
+
+    Returns the HKEX IPO pipeline including company name, stock code,
+    listing date, offer price, subscription rate, and market cap.
+    Useful for identifying new listing opportunities and supply overhang
+    from upcoming IPOs.
+    """
+    header = f"# HK IPO / New Listings (港股新股)\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    try:
+        data = ak.stock_hk_ipo_info()
+        if data.empty:
+            return header + "No HK IPO data currently available."
+
+        csv_str = data.to_csv(index=False, encoding="utf-8")
+        return header + csv_str
+    except Exception as e:
+        return header + f"Error retrieving HK IPO data: {str(e)}"

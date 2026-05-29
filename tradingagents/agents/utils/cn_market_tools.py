@@ -104,3 +104,19 @@ def get_hk_short_selling(
         str: Daily short selling records with volume, value, and % of turnover
     """
     return route_to_vendor("get_hk_short_selling", ticker, trade_date)
+
+
+@tool
+def get_hk_ipo() -> str:
+    """Retrieve upcoming and recent HK stock IPO / new listing data (港股新股).
+
+    Returns the HKEX IPO pipeline including company name, stock code,
+    listing date, offer price, subscription rate, and expected market cap.
+    Use this to identify new listing opportunities, gauge market sentiment
+    (hot IPOs signal bullish appetite), and assess supply overhang from
+    upcoming large listings.
+
+    Returns:
+        str: HK IPO pipeline data with listing dates and subscription details
+    """
+    return route_to_vendor("get_hk_ipo")

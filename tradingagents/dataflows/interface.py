@@ -38,6 +38,7 @@ from .akshare_data import (
     get_northbound_flow_akshare,
     get_southbound_flow_akshare,
     get_hk_short_selling_akshare,
+    get_hk_ipo_akshare,
 )
 
 # Configuration and routing logic
@@ -77,6 +78,7 @@ TOOLS_CATEGORIES = {
             "get_northbound_flow",
             "get_southbound_flow",
             "get_hk_short_selling",
+            "get_hk_ipo",
         ]
     }
 }
@@ -153,6 +155,9 @@ VENDOR_METHODS = {
     },
     "get_hk_short_selling": {
         "akshare": get_hk_short_selling_akshare,
+    },
+    "get_hk_ipo": {
+        "akshare": get_hk_ipo_akshare,
     },
 }
 

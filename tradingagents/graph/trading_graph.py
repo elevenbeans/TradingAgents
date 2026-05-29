@@ -38,6 +38,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_global_news,
     get_dragon_tiger,
+    get_hk_ipo,
     get_hk_short_selling,
     get_lockup_expiry,
     get_northbound_flow,
@@ -190,6 +191,7 @@ class TradingAgentsGraph:
                     # HK stock specific tools
                     get_southbound_flow,
                     get_hk_short_selling,
+                    get_hk_ipo,
                 ]
             ),
             "fundamentals": ToolNode(

@@ -22,6 +22,7 @@ from tradingagents.agents.utils.news_data_tools import (
 )
 from tradingagents.agents.utils.cn_market_tools import (
     get_dragon_tiger,
+    get_hk_ipo,
     get_hk_short_selling,
     get_lockup_expiry,
     get_northbound_flow,
