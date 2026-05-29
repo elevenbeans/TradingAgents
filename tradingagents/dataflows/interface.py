@@ -36,6 +36,8 @@ from .akshare_data import (
     get_dragon_tiger_akshare,
     get_lockup_expiry_akshare,
     get_northbound_flow_akshare,
+    get_southbound_flow_akshare,
+    get_hk_short_selling_akshare,
 )
 
 # Configuration and routing logic
@@ -73,6 +75,8 @@ TOOLS_CATEGORIES = {
             "get_dragon_tiger",
             "get_lockup_expiry",
             "get_northbound_flow",
+            "get_southbound_flow",
+            "get_hk_short_selling",
         ]
     }
 }
@@ -134,7 +138,7 @@ VENDOR_METHODS = {
         "akshare": get_insider_transactions_akshare,
         "yfinance": get_yfinance_insider_transactions,
     },
-    # A-share specific tools (akshare only)
+    # China market specific tools (akshare only)
     "get_dragon_tiger": {
         "akshare": get_dragon_tiger_akshare,
     },
@@ -143,6 +147,12 @@ VENDOR_METHODS = {
     },
     "get_northbound_flow": {
         "akshare": get_northbound_flow_akshare,
+    },
+    "get_southbound_flow": {
+        "akshare": get_southbound_flow_akshare,
+    },
+    "get_hk_short_selling": {
+        "akshare": get_hk_short_selling_akshare,
     },
 }
 

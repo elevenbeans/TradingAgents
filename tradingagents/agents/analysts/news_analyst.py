@@ -3,10 +3,12 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_dragon_tiger,
     get_global_news,
+    get_hk_short_selling,
     get_language_instruction,
     get_lockup_expiry,
     get_news,
     get_northbound_flow,
+    get_southbound_flow,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -26,6 +28,8 @@ def create_news_analyst(llm):
             get_dragon_tiger,
             get_lockup_expiry,
             get_northbound_flow,
+            get_southbound_flow,
+            get_hk_short_selling,
         ]
 
         system_message = (

@@ -10,6 +10,45 @@ from .config import get_config
 from .utils import safe_ticker_component
 
 
+def _find_date_column(df: pd.DataFrame) -> Optional[str]:
+    """Find a date-like column in a DataFrame.
+
+    Returns the first column name that matches common Chinese/English
+    date column patterns. Used for post-filtering against look-ahead bias.
+    """
+    date_patterns = ["日期", "时间", "date", "time", "报表日期", "公告日期", "发布日期"]
+    for col in df.columns:
+        col_lower = str(col).lower()
+        for pat in date_patterns:
+            if pat.lower() in col_lower:
+                return col
+    return None
+
+
+def _filter_df_by_date(
+    df: pd.DataFrame, cutoff_date: str, date_col: Optional[str] = None
+) -> pd.DataFrame:
+    """Filter DataFrame to rows on or before ``cutoff_date`` (YYYY-MM-DD).
+
+    Returns the filtered DataFrame. If ``date_col`` is not provided, the
+    first date-like column is auto-detected via ``_find_date_column``.
+    If no date column can be identified, the original DataFrame is returned
+    unchanged (caller should treat results as potentially forward-looking).
+    """
+    if df.empty:
+        return df
+    if date_col is None:
+        date_col = _find_date_column(df)
+    if date_col is None:
+        return df
+
+    cutoff = pd.Timestamp(cutoff_date)
+    series = pd.to_datetime(df[date_col], errors="coerce")
+    mask = series <= cutoff
+    mask = mask | series.isna()  # keep rows with unparseable dates (don't silently drop)
+    return df.loc[mask]
+
+
 def _normalize_hk_symbol(symbol: str) -> str:
     """Normalize HK stock symbol to akshare format (5-digit zero-padded).
 
@@ -309,11 +348,28 @@ def get_fundamentals_akshare(
 ) -> str:
     """Get company fundamentals overview via akshare.
 
-    Combines company profile with key financial indicators.
+    Financial indicators and reports are filtered to periods on or
+    before ``curr_date``. Company profile snapshots (e.g. market cap,
+    PE ratio) reflect the latest available data and carry a warning
+    when ``curr_date`` is more than 30 days in the past.
     """
     try:
+        is_stale = False
+        if curr_date:
+            cutoff = pd.Timestamp(curr_date)
+            days_behind = (pd.Timestamp.today() - cutoff).days
+            is_stale = days_behind > 30
+
         header = f"# Company Fundamentals for {ticker}\n"
-        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        if curr_date:
+            header += f"# Analysis date: {curr_date}"
+            if is_stale:
+                header += f" ({days_behind} days ago)"
+            header += "\n"
+            if is_stale:
+                header += "⚠️  WARNING: snapshot fields (market cap, PE, etc.) reflect current data, not the analysis date. Historical snapshots are not available from this data source.\n"
+        header += "\n"
         lines = []
 
         if _is_hk_ticker(ticker):
@@ -330,6 +386,14 @@ def get_fundamentals_akshare(
 
             indicators = ak.stock_hk_financial_indicator_em(symbol=sym)
             if not indicators.empty:
+                if curr_date:
+                    try:
+                        date_col = _find_date_column(indicators)
+                        if date_col:
+                            indicators = _filter_df_by_date(indicators, curr_date, date_col)
+                    except Exception:
+                        pass
+
                 lines.append("\n--- Key Financial Indicators ---")
                 indicator_labels = {
                     "基本每股收益(元)": "EPS (Basic)",
@@ -363,12 +427,28 @@ def get_fundamentals_akshare(
 
             fin = ak.stock_financial_abstract(symbol=sym, indicator="按年度")
             if not fin.empty:
+                if curr_date:
+                    try:
+                        date_col = _find_date_column(fin)
+                        if date_col:
+                            fin = _filter_df_by_date(fin, curr_date, date_col)
+                    except Exception:
+                        pass
+
                 lines.append("\n--- Key Financial Indicators ---")
                 fin_str = fin.to_string(index=False)
                 lines.append(fin_str)
 
             profit = ak.stock_profit_sheet_by_report_em(symbol=sym)
             if not profit.empty:
+                if curr_date:
+                    try:
+                        date_col = _find_date_column(profit)
+                        if date_col:
+                            profit = _filter_df_by_date(profit, curr_date, date_col)
+                    except Exception:
+                        pass
+
                 lines.append("\n--- Profit Forecast ---")
                 profit_str = profit.to_string(index=False)
                 lines.append(profit_str)
@@ -541,22 +621,38 @@ def get_news_akshare(
 ) -> str:
     """Get news for a ticker via akshare.
 
-    Akshare's HK news coverage is limited. Returns what's available
-    from East Money's HK stock news.
+    Post-filters returned data to the [start_date, end_date] range to
+    prevent look-ahead bias. If the upstream API does not return date
+    fields, a warning is appended to the output.
     """
     try:
         header = f"# News for {ticker} from {start_date} to {end_date}\n"
-        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        header += f"# Filter: only news published between {start_date} and {end_date}\n\n"
 
         if _is_hk_ticker(ticker):
             try:
                 news_detail = ak.stock_hk_famous_spot_em()
-                articles = []
                 if not news_detail.empty:
-                    for _, row in news_detail.iterrows():
+                    date_col = _find_date_column(news_detail)
+                    if date_col:
+                        end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1)
+                        start_dt = pd.Timestamp(start_date)
+                        raw = pd.to_datetime(news_detail[date_col], errors="coerce", infer_datetime_format=True)
+                        mask = (raw >= start_dt) & (raw < end_dt)
+                        mask = mask | raw.isna()
+                        filtered = news_detail.loc[mask]
+                    else:
+                        filtered = news_detail
+                        header += "⚠️  WARNING: news source does not provide date fields — results may include articles outside the requested date range.\n\n"
+
+                    articles = []
+                    for _, row in filtered.iterrows():
                         articles.append(str(dict(row)))
-                if articles:
-                    return header + "\n".join(articles[:20])
+                    limit = get_config().get("news_article_limit", 20)
+                    if articles:
+                        return header + "\n".join(articles[:limit])
+                    return header + "No specific news articles found for this period."
                 return header + "No specific news articles found for this period."
             except Exception:
                 return header + "News data temporarily unavailable."
@@ -566,6 +662,19 @@ def get_news_akshare(
             try:
                 news = ak.stock_info_js(symbol=sym)
                 if not news.empty:
+                    date_col = _find_date_column(news)
+                    if date_col:
+                        end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1)
+                        start_dt = pd.Timestamp(start_date)
+                        raw = pd.to_datetime(news[date_col], errors="coerce", infer_datetime_format=True)
+                        mask = (raw >= start_dt) & (raw < end_dt)
+                        mask = mask | raw.isna()
+                        news = news.loc[mask]
+                    else:
+                        header += "⚠️  WARNING: news source does not provide date fields — results may include articles outside the requested date range.\n\n"
+
+                    if news.empty:
+                        return header + "No news articles found for this period."
                     return header + news.to_csv(index=False, encoding="utf-8")
                 return header + "No news articles found."
             except Exception:
@@ -584,8 +693,9 @@ def get_global_news_akshare(
 ) -> str:
     """Get global/macro news via akshare.
 
-    Falls back to Chinese financial news sources since akshare
-    does not have direct global news feeds.
+    Post-filters returned data to ``curr_date`` and earlier to prevent
+    look-ahead bias. Falls back to Chinese financial news sources since
+    akshare does not have direct global news feeds.
     """
     config = get_config()
     if limit is None:
@@ -593,9 +703,13 @@ def get_global_news_akshare(
     if look_back_days is None:
         look_back_days = config.get("global_news_lookback_days", 7)
 
+    year_limit = pd.Timestamp(curr_date) - pd.Timedelta(days=look_back_days)
+
     header = f"# Global Macro News\n"
     header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    header += f"# Lookback: {look_back_days} days\n\n"
+    header += f"# Filter: news from {year_limit.strftime('%Y-%m-%d')} to {curr_date} (lookback: {look_back_days} days)\n\n"
+
+    has_date_filter = False
 
     try:
         news_items = []
@@ -603,6 +717,10 @@ def get_global_news_akshare(
         try:
             cn_news = ak.stock_info_global_em()
             if not cn_news.empty:
+                date_col = _find_date_column(cn_news)
+                if date_col:
+                    cn_news = _filter_df_by_date(cn_news, curr_date, date_col)
+                    has_date_filter = True
                 news_items.append(cn_news.head(limit).to_string(index=False))
         except Exception:
             pass
@@ -610,9 +728,16 @@ def get_global_news_akshare(
         try:
             hk_info = ak.macro_china_hk_market_info()
             if not hk_info.empty:
+                date_col = _find_date_column(hk_info)
+                if date_col:
+                    hk_info = _filter_df_by_date(hk_info, curr_date, date_col)
+                    has_date_filter = True
                 news_items.append(hk_info.to_string(index=False))
         except Exception:
             pass
+
+        if not has_date_filter and news_items:
+            header += "⚠️  WARNING: news source does not provide date fields — results may include future articles relative to the analysis date.\n\n"
 
         if news_items:
             return header + "\n\n".join(news_items)
@@ -732,3 +857,87 @@ def get_northbound_flow_akshare(
         return header + csv_str
     except Exception as e:
         return header + f"Error retrieving northbound flow data: {str(e)}"
+
+
+def get_southbound_flow_akshare(
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+) -> str:
+    """Get Southbound capital flow (南向资金) data via Stock Connect.
+
+    Southbound flows represent mainland Chinese investors buying HK stocks
+    through Shanghai/Shenzhen-HK Stock Connect. Significant southbound
+    inflows are bullish for HK stocks, especially H-shares and tech names.
+    """
+    header = f"# Southbound Capital Flow (南向资金)\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+    try:
+        data = ak.stock_hsgt_south_net_flow_in_em(symbol="南下")
+        if data.empty:
+            return header + "Southbound flow data is temporarily unavailable."
+
+        date_str = trade_date.replace("-", "")
+        if "日期" in data.columns:
+            data["日期_str"] = data["日期"].astype(str).str[:10]
+            filtered = data[data["日期_str"] == date_str]
+        else:
+            filtered = data
+
+        if filtered.empty:
+            recent = data.tail(5) if len(data) > 5 else data
+            csv_str = recent.to_csv(index=False, encoding="utf-8")
+            return header + f"No data for exact date {trade_date}. Showing most recent records:\n\n" + csv_str
+
+        csv_str = filtered.to_csv(index=False, encoding="utf-8")
+        return header + csv_str
+    except Exception as e:
+        return header + f"Error retrieving southbound flow data: {str(e)}"
+
+
+def get_hk_short_selling_akshare(
+    ticker: Annotated[str, "ticker symbol"],
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"] = None,
+) -> str:
+    """Get HK stock short selling activity data.
+
+    HKEX discloses daily short selling volume and value per stock for
+    designated short-selling eligible securities. Rising short interest
+    signals bearish sentiment; declining short interest can indicate
+    improving confidence or a short-squeeze setup.
+
+    When ``trade_date`` is provided, results are filtered to only include
+    records on or before that date to prevent look-ahead bias.
+    """
+    header = f"# HK Short Selling Data for {ticker}\n"
+    header += f"# Retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    if trade_date:
+        header += f"# Analysis date: {trade_date} (records after this date are excluded)\n"
+    header += "\n"
+
+    if not _is_hk_ticker(ticker):
+        return header + "Short selling data is only available for HK-listed stocks."
+
+    try:
+        sym = _normalize_hk_symbol(ticker)
+        try:
+            data = ak.stock_hk_short_selling_em(symbol=sym)
+        except Exception:
+            return header + f"No short selling data found for {ticker} (API may have changed or stock not eligible)."
+
+        if data.empty:
+            return header + f"No short selling records found for {ticker}."
+
+        if trade_date:
+            date_col = _find_date_column(data)
+            if date_col:
+                data = _filter_df_by_date(data, trade_date, date_col)
+            else:
+                header += "⚠️  WARNING: short-selling data does not contain date fields — results may include records after the analysis date.\n\n"
+
+        if data.empty:
+            return header + f"No short selling records found for {ticker} on or before {trade_date}."
+
+        csv_str = data.to_csv(index=False, encoding="utf-8")
+        return header + csv_str
+    except Exception as e:
+        return header + f"Error retrieving short selling data: {str(e)}"

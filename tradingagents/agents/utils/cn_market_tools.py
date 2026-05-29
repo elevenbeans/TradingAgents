@@ -62,3 +62,45 @@ def get_northbound_flow(
         str: Northbound net flow data (daily net buy/sell amounts by market)
     """
     return route_to_vendor("get_northbound_flow", trade_date)
+
+
+@tool
+def get_southbound_flow(
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+) -> str:
+    """Retrieve Southbound capital flow (南向资金) data from Stock Connect.
+
+    Southbound flows represent mainland Chinese investors buying HK stocks
+    through Shanghai/Shenzhen-HK Stock Connect (港股通). Significant
+    southbound inflows are bullish for HK stocks, especially H-shares and
+    tech names like Tencent, Alibaba, Meituan etc.
+
+    Args:
+        trade_date: Analysis date in YYYY-MM-DD format
+
+    Returns:
+        str: Southbound net flow data (daily net buy/sell amounts by market)
+    """
+    return route_to_vendor("get_southbound_flow", trade_date)
+
+
+@tool
+def get_hk_short_selling(
+    ticker: Annotated[str, "HK ticker symbol"],
+    trade_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+) -> str:
+    """Retrieve HK stock short selling activity data.
+
+    HKEX (香港交易所) discloses daily short selling volume and value per
+    stock for designated short-selling eligible securities. Rising short
+    interest signals bearish sentiment; declining short interest can indicate
+    improving confidence or a short-squeeze setup.
+
+    Args:
+        ticker: HK stock ticker with .HK suffix (e.g. 0700.HK)
+        trade_date: Analysis date in YYYY-MM-DD format — results after this date are excluded
+
+    Returns:
+        str: Daily short selling records with volume, value, and % of turnover
+    """
+    return route_to_vendor("get_hk_short_selling", ticker, trade_date)

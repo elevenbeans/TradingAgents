@@ -38,8 +38,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_global_news,
     get_dragon_tiger,
+    get_hk_short_selling,
     get_lockup_expiry,
     get_northbound_flow,
+    get_southbound_flow,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -185,6 +187,9 @@ class TradingAgentsGraph:
                     get_dragon_tiger,
                     get_lockup_expiry,
                     get_northbound_flow,
+                    # HK stock specific tools
+                    get_southbound_flow,
+                    get_hk_short_selling,
                 ]
             ),
             "fundamentals": ToolNode(

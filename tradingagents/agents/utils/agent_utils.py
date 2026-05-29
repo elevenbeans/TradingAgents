@@ -1,3 +1,5 @@
+import re
+
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
@@ -18,10 +20,12 @@ from tradingagents.agents.utils.news_data_tools import (
     get_insider_transactions,
     get_global_news
 )
-from tradingagents.agents.utils.a_share_tools import (
+from tradingagents.agents.utils.cn_market_tools import (
     get_dragon_tiger,
+    get_hk_short_selling,
     get_lockup_expiry,
     get_northbound_flow,
+    get_southbound_flow,
 )
 
 
@@ -85,6 +89,47 @@ You are analyzing a Chinese A-share stock. The following rules are critical for 
 - **Northbound Capital (北向资金)**: Flows through Stock Connect (沪深港通) from Hong Kong-based foreign investors are a daily sentiment barometer.
 """
 
+HK_MARKET_RULES = """
+## Hong Kong Stock Market Rules (港股)
+
+You are analyzing a Hong Kong-listed stock. The following rules are critical for your analysis:
+
+### Trading Mechanics
+- **T+2 Settlement**: Shares are delivered 2 business days after the trade date. No intraday restriction on selling — you can buy and sell on the same day.
+- **No Daily Price Limits**: HK stocks have no price bands — they can gap dramatically on news/earnings. Position sizing and stop-losses are essential.
+- **Lot Size (每手股数)**: Each stock has a fixed board lot size set by the HKEX (香港交易所). Common lot sizes are 100, 200, 500, 1000, or 2000 shares depending on the stock price tier. Always check the lot size before sizing positions.
+- **Short Selling**: Allowed only for **designated securities** (HKEX maintains an eligible list). Short selling data is publicly disclosed daily — use `get_hk_short_selling` to check short interest trends.
+- **Trading Hours**: Morning session 9:30–12:00, Afternoon session 13:00–16:00. No lunch break closure. Pre-opening session 9:00–9:30.
+- **Stamp Duty (印花税)**: 0.1% on transaction value (collected on both buy and sell). Reduced from 0.13% effective November 2023.
+- **No Capital Gains Tax**: Hong Kong does not tax capital gains or dividends for individual investors. However, H-share dividends are subject to 10% PRC withholding tax.
+
+### Stock Types
+- **Blue Chips (蓝筹股)**: Large-cap stocks, typically Hang Seng Index constituents (e.g. 0700.HK Tencent, 0005.HK HSBC).
+- **H-Shares (H股)**: Mainland Chinese companies incorporated in the PRC and listed in HK. Subject to 10% dividend withholding tax.
+- **Red Chips (红筹股)**: Mainland Chinese state-owned enterprises incorporated outside the PRC and listed in HK.
+- **Growth Enterprise Market (GEM/创业板)**: Smaller, higher-risk stocks with the prefix "8" (e.g. 8xxx.HK).
+
+### Stock Connect (沪深港通)
+- **Southbound Capital (南向资金)**: Mainland Chinese investors buying HK stocks via Shanghai/Shenzhen-HK Stock Connect. Significant southbound inflows are bullish for HK stocks, especially H-shares.
+- **Northbound Capital (北向资金)**: Foreign investors buying A-shares through the same mechanism — impacts A-share sentiment but also indicates overall cross-border appetite.
+- **Quota System**: Daily quotas apply to both directions; exhaustion of southbound quota can cap upside momentum.
+
+### Financial Reporting (财务披露)
+- **Annual Report**: Must be published within 4 months of fiscal year-end (for Dec year-end: by April 30).
+- **Interim Report (半年报)**: Must be published within 3 months of the period end.
+- HK-listed companies follow HKFRS (Hong Kong Financial Reporting Standards), aligned with IFRS.
+
+### Key Indices
+- **Hang Seng Index (恒生指数, ^HSI)**: The primary benchmark for HK stocks. HSI inclusion/exclusion drives significant passive fund flows.
+- **Hang Seng China Enterprises Index (恒生中国企业指数, ^HSCEI)**: Tracks H-shares — relevant for mainland-linked HK stocks.
+- **Hang Seng Tech Index (恒生科技指数)**: Tracks major HK-listed tech companies like Tencent, Alibaba, Meituan, etc.
+
+### Other Key Considerations
+- **Typhoon/Rain Signal Closures**: The HKEX may close or shorten trading during typhoon signal No. 8 or black rainstorm warnings. Check for unexpected trading halts on extreme weather days.
+- **IPO / Block Trade Activity**: Large block trades and new listings can create supply overhang. Monitor share registrations for placement activity.
+- **Currency Exposure**: HK stocks trade in HKD (pegged to USD at ~7.75–7.85). Mainland businesses report in RMB — currency translation affects reported financials.
+"""
+
 
 def _is_a_share_ticker(ticker: str) -> bool:
     """Detect A-share stocks by exchange suffix or 6-digit numeric code."""
@@ -94,6 +139,15 @@ def _is_a_share_ticker(ticker: str) -> bool:
     if t.isdigit() and len(t) == 6:
         return True
     return False
+
+
+def _is_hk_ticker(ticker: str) -> bool:
+    """Detect HK stocks by .HK suffix or 1-5 digit numeric code."""
+    t = ticker.strip().upper()
+    if t.endswith(".HK"):
+        return True
+    t_clean = t.replace(".HK", "")
+    return bool(re.match(r"^\d{1,5}$", t_clean))
 
 
 def build_instrument_context(ticker: str, asset_type: str = "stock") -> str:
@@ -112,8 +166,11 @@ def build_instrument_context(ticker: str, asset_type: str = "stock") -> str:
         + extra_hint
     )
 
-    if asset_type == "stock" and _is_a_share_ticker(ticker):
-        context += A_SHARE_MARKET_RULES
+    if asset_type == "stock":
+        if _is_a_share_ticker(ticker):
+            context += A_SHARE_MARKET_RULES
+        elif _is_hk_ticker(ticker):
+            context += HK_MARKET_RULES
 
     return context
 

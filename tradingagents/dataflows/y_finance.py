@@ -247,10 +247,21 @@ def get_stockstats_indicator(
 
 def get_fundamentals(
     ticker: Annotated[str, "ticker symbol of the company"],
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
+    curr_date: Annotated[str, "current date, yyyy-mm-dd"] = None
 ):
-    """Get company fundamentals overview from yfinance."""
+    """Get company fundamentals overview from yfinance.
+
+    NOTE: ``curr_date`` cannot be used for historical backfill — yfinance
+    always returns the latest available snapshot. A warning is appended
+    when ``curr_date`` is more than 30 days in the past.
+    """
     try:
+        is_stale = False
+        if curr_date:
+            cutoff = pd.Timestamp(curr_date)
+            days_behind = (pd.Timestamp.today() - cutoff).days
+            is_stale = days_behind > 30
+
         ticker_obj = yf.Ticker(ticker.upper())
         info = yf_retry(lambda: ticker_obj.info)
 
@@ -294,7 +305,15 @@ def get_fundamentals(
                 lines.append(f"{label}: {value}")
 
         header = f"# Company Fundamentals for {ticker.upper()}\n"
-        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        if curr_date:
+            header += f"# Analysis date: {curr_date}"
+            if is_stale:
+                header += f" ({days_behind} days ago)"
+            header += "\n"
+            if is_stale:
+                header += "⚠️  WARNING: all fields reflect the current live snapshot, not the analysis date. Historical fundamental snapshots are not available from yfinance.\n"
+        header += "\n"
 
         return header + "\n".join(lines)
 
